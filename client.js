@@ -84,6 +84,14 @@ window.__ModuleLoader__.load({
 
     // ⭐ 2026-10-16 改：去掉峰谷时段，改成"每天几点跑一轮"（跟 lib/state.mjs 的 runAt 一致）
     const DEFAULT_RUN_AT = '09:00'
+    const TZ = 'Asia/Shanghai'
+
+    /** 时间戳 → 北京时间字符串（浏览器所在时区不可信：手机上的 dsha 容器是 UTC） */
+    const fmtBeijing = (iso) => {
+      try {
+        return new Date(iso).toLocaleString('zh-CN', { timeZone: TZ, hour12: false })
+      } catch { return String(iso) }
+    }
 
     /* ────────────── 小组件 ────────────── */
 
@@ -357,7 +365,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => setPerDay(e.target.value),
               onBlur: () => { const n = Math.max(0, Math.min(Number(perDay) || 0, 50)); setPerDay(String(n)); patch({ perDay: n }, '每天挑几条') },
             })),
-          st.lastRunAt ? h('div', { 'data-bd-note': '' }, `上次跑：${new Date(st.lastRunAt).toLocaleString('zh-CN')}`) : null),
+          st.lastRunAt ? h('div', { 'data-bd-note': '' }, `上次跑：${fmtBeijing(st.lastRunAt)}`) : null),
 
         /* ── 发言与转写 ── */
         h('div', { 'data-bd-sec': '' },

@@ -21,7 +21,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { McpClient } from './lib/mcp.mjs'
-import { stateDirOf, readJson, writeJson, ensureHomeFiles, pastRunAt, minutesOf, dayKey } from './lib/state.mjs'
+import { stateDirOf, readJson, writeJson, ensureHomeFiles, pastRunAt, minutesOf, nowMinutes, dayKey, TZ, zonedParts } from './lib/state.mjs'
 import { loginStart, loginPoll, saveCredential, renderQrPng } from './lib/login.mjs'
 import { ensureUv } from './lib/uvfetch.mjs'
 
@@ -533,7 +533,8 @@ export function apply(ctx, config) {
       shell: dsh.shell,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, BILI_DUTY_HOME: stateDir },
+      env: { ...process.env, BILI_DUTY_HOME: stateDir, TZ },
+      // ⭐ 给这一轮也带上时区：asr.py / yt-dlp 的日志时间、以及它自己写的报告日期，都跟插件一致
     })
     // 🔴 2026-10-16 修（对应上游 open issue #1）：这里以前是裸的 appendFileSync。
     //    `duty.log` 被别的进程占着时（杀软/索引器/没退干净的上一轮）会抛 EBUSY，
@@ -572,7 +573,7 @@ export function apply(ctx, config) {
       const st = readJson(dutyStateFile, {})
       if (st.ranDay === today) return                  // 今天已经跑过了
       if (Number(cfg.perDay || 0) <= 0) return         // 每天 0 条 = 不自动刷
-      const late = now.getHours() * 60 + now.getMinutes() - minutesOf(cfg.runAt) > 5
+      const late = nowMinutes(now) - minutesOf(cfg.runAt) > 5      // ⭐ 按北京时间算（不是容器本地时间）
       bumpState({ ranDay: today, lastRunAt: now.toISOString(), lastWhy: late ? 'catchup' : 'daily' })
       runDuty(late ? 'catchup' : 'daily')
     } catch (e) {
