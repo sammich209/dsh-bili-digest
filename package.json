@@ -1,0 +1,77 @@
+{
+  "name": "dsh-bili-digest",
+  "version": "0.1.3",
+  "description": "DSH 插件：每天替你挑一批 B站 视频，读字幕原文后按\"值不值得看\"排序给你",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "bilibili",
+    "mcp",
+    "duty"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sammich209/dsh-bili-digest.git"
+  },
+  "homepage": "https://github.com/sammich209/dsh-bili-digest#readme",
+  "bugs": {
+    "url": "https://github.com/sammich209/dsh-bili-digest/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "prompts",
+    "vendor",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.1",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
