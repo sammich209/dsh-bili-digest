@@ -148,6 +148,8 @@ window.__ModuleLoader__.load({
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
       const [perDay, setPerDay] = React.useState(null)
       const [runAt, setRunAt] = React.useState(null)
+      const [dmUid, setDmUid] = React.useState(null)
+      const [dmTopN, setDmTopN] = React.useState(null)
       const [llm, setLlm] = React.useState(null)        // { provider, model, effort } 草稿
       const [models, setModels] = React.useState(null)  // 从 /models 拉到的清单
       const [modelsBusy, setModelsBusy] = React.useState(false)
@@ -156,7 +158,6 @@ window.__ModuleLoader__.load({
       const [mention, setMention] = React.useState(null)
       const [login, setLogin] = React.useState(null)
       const [runNote, setRunNote] = React.useState(null)
-      const [report, setReport] = React.useState(null)        // 非 null = 报告已展开   // 顶部那行状态（跑一轮/装依赖的反馈原来在最底下，看不见）
       const [loginState, setLoginState] = React.useState('')
       const [loginTone, setLoginTone] = React.useState('')
 
@@ -167,6 +168,8 @@ window.__ModuleLoader__.load({
         if (cfg && rl === null) setRl(cfg.reportLevel || 'full')
         if (cfg && perDay === null) setPerDay(String(cfg.perDay ?? 5))
         if (cfg && runAt === null) setRunAt(cfg.runAt || DEFAULT_RUN_AT)
+        if (cfg && dmUid === null) setDmUid(cfg.dmUid || '')
+        if (cfg && dmTopN === null) setDmTopN(String(cfg.dmTopN ?? 5))
         if (cfg && llm === null) setLlm({ provider: cfg.llmProvider || '', model: cfg.llmModel || '', effort: cfg.llmReasoningEffort || '' })
         if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))
         if (cfg && replyPer === null) setReplyPer(String(cfg.replyPerRound ?? 1))
@@ -186,15 +189,6 @@ window.__ModuleLoader__.load({
           say(what ? `${what}：已保存` : '已保存', 'good')
         } catch (e) { say(String(e?.message ?? e), 'warn') }
         finally { setBusy('') }
-      }
-
-      const onShowReport = async () => {
-        if (report !== null) { setReport(null); return }       // 再点一次收起
-        setBusy('report')
-        try {
-          const r = await jget('/report')
-          setReport(r && r.exists ? (r.text || '（报告是空的）') : '今天还没有报告 —— 跑一轮之后就有了')
-        } catch (e) { setReport('读不到报告：' + String(e?.message ?? e)) } finally { setBusy('') }
       }
 
       const copyText = async (text) => {
@@ -454,6 +448,39 @@ window.__ModuleLoader__.load({
               h('div', { 'data-bd-note': '' }, st.asrInstalling ? '正在装转写依赖（进度）：' : '转写依赖的日志（末尾）—— 只有「没字幕的视频」用得到它：'),
               h('pre', { 'data-bd-pre': '' }, st.asrTail)) : null) : null),
 
+        /* ── 私信推送 ── */
+        h('div', { 'data-bd-sec': '' },
+          h('div', { 'data-bd-h': '' }, '把精选私信给我'),
+          h('div', { 'data-bd-note': '' },
+            '跑完把「精选前几条」发成 B站 私信 —— 私信有真推送，比评论 @ 靠谱。'),
+          h(ToggleRow, {
+            label: '发私信给我',
+            note: '默认关；开了之后每轮跑完发一条精简私信（B站 单条上限 330 字，超了会自动砍条数）',
+            on: sw('dmEnabled'),
+            onChange: (v) => patch({ dmEnabled: v }, '发私信'),
+          }),
+          sw('dmEnabled') ? h('div', { 'data-bd-sub': '' },
+            h('div', { 'data-bd-row': '' },
+              h('div', { 'data-bd-grow': '' },
+                h('div', { 'data-bd-label': '' }, '发给谁（B站 UID）'),
+                h('div', { 'data-bd-note': '' }, '纯数字；你主页 URL 里那段，如 space.bilibili.com/415128903')),
+              h('input', {
+                'data-bd-input': '', 'data-bd-wide': '', type: 'text', inputMode: 'numeric',
+                placeholder: '例如 415128903', value: dmUid ?? '',
+                onChange: (e) => setDmUid(e.target.value.replace(/[^0-9]/g, '')),
+                onBlur: () => { const v = String(dmUid || '').replace(/[^0-9]/g, ''); setDmUid(v); patch({ dmUid: v }, '私信 UID') },
+              })),
+            h('div', { 'data-bd-row': '' },
+              h('div', { 'data-bd-grow': '' },
+                h('div', { 'data-bd-label': '' }, '私信里最多几条'),
+                h('div', { 'data-bd-note': '' }, '填 0 = 用默认 10 条；字数超了会自动往下砍')),
+              h('input', {
+                'data-bd-input': '', 'data-bd-num': '', type: 'number', min: 0, max: 10,
+                value: dmTopN ?? '',
+                onChange: (e) => setDmTopN(e.target.value),
+                onBlur: () => { const n = Math.max(0, Math.min(Number(dmTopN) || 0, 10)); setDmTopN(String(n)); patch({ dmTopN: n }, '私信条数') },
+              }))) : null),
+
         /* ── 关注什么 / 在哪儿刷 ── */
         h('div', { 'data-bd-sec': '' },
           h('div', { 'data-bd-h': '' }, '关注什么'),
@@ -563,12 +590,9 @@ window.__ModuleLoader__.load({
             h('br'),
             `今天的报告：${st.report}`),
           h('div', { 'data-bd-row': '' },
-            h('button', { 'data-bd-btn': '', disabled: busy === 'report', onClick: onShowReport },
-              report !== null ? '收起报告' : '看今天的报告'),
             h('button', { 'data-bd-btn': '', onClick: () => onOpenFolder('out') }, '打开报告文件夹'),
             h('button', { 'data-bd-btn': '', onClick: () => onOpenFolder('home') }, '打开家目录'),
-            h('button', { 'data-bd-btn': '', onClick: () => copyText(st.report) }, '复制报告路径')),
-          report !== null ? h('pre', { 'data-bd-pre': '' }, report) : null),
+            h('button', { 'data-bd-btn': '', onClick: () => copyText(st.report) }, '复制报告路径'))),
       )
     }
 

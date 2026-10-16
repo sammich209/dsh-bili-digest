@@ -17,6 +17,7 @@
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -82,6 +83,12 @@ export const Config = z.object({
   workspace: z.string().default('').extra('volatile', true),
   /** 日报形态：full=完整（现状）· brief=每条一两行 · off=不写报告（只发评论） */
   reportLevel: z.string().default('full').extra('volatile', true),
+  /** ⭐ 把每轮的「精简精选」私信发给使用者（默认关）—— 比 @ 评论可靠：私信有真推送 */
+  dmEnabled: z.boolean().default(false).extra('volatile', true),
+  /** ⭐ 私信发给谁（B站 UID，纯数字）—— 空 = 不发 */
+  dmUid: z.string().default('').extra('volatile', true),
+  /** ⭐ 私信里最多几条（0 = 不限，但单条上限 330 字，超了会自动砍） */
+  dmTopN: z.natural().default(5).extra('volatile', true),
   /** 回复评论：默认关。开了之后只回「直接回复到它那条评论下面的人」 */
   replyToComments: z.boolean().default(false).extra('volatile', true),
   /** 每轮最多回几条 */
@@ -124,6 +131,9 @@ export function apply(ctx, config) {
   const outDir = join(stateDir, 'out')
   mkdirSync(outDir, { recursive: true })
 
+  /** 一段文本的 sha256 短哈希（用来判断"这份私信和上次一不一样"） */
+  const hashOf = (t) => { try { return createHash('sha256').update(String(t)).digest('hex').slice(0, 16) } catch { return '' } }
+
   const log = (msg) => {
     const line = `${new Date().toISOString()}  ${msg}`
     try { appendFileSync(logFile, line + '\n', 'utf8') } catch { /* 日志写不进去也不致命 */ }
@@ -145,6 +155,7 @@ export function apply(ctx, config) {
     keywords: [], commentPerRound: 1, mentionName: '', pythonPath: 'python', dshBin: '', headlessProfile: 'headless',
     llmProvider: '', llmModel: '', llmReasoningEffort: '',
     overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    dmEnabled: false, dmUid: '', dmTopN: 5,
   }
   const normalize = (src, base) => {
     const out = { ...base }
@@ -166,6 +177,10 @@ export function apply(ctx, config) {
       const t = String(clean.runAt || '').trim()
       clean.runAt = minutesOf(t) === null ? cfg.runAt : t.padStart(5, '0')
     }
+    // ⭐ 私信：UID 只留数字（用户可能整段 URL 贴进来）、条数夹在 0–10
+    if ('dmUid' in clean) clean.dmUid = String(clean.dmUid || '').replace(/[^0-9]/g, '')
+    if ('dmTopN' in clean) clean.dmTopN = Math.max(0, Math.min(Number(clean.dmTopN) || 0, 10))
+    if ('dmEnabled' in clean) clean.dmEnabled = Boolean(clean.dmEnabled)
     Object.assign(cfg, clean)
     writeJson(cfgFile, cfg)
   }
@@ -462,6 +477,87 @@ export function apply(ctx, config) {
     return { command: 'dsh', args: [], shell: true }
   }
 
+  /**
+   * ⭐ 私信「精简版」的要求。
+   * 为什么不让模型自己调 bili_send_message：那样它得为发消息再生成一轮工具调用（费 token），
+   * 而且它可能记不住发。⇒ 让它**只写文本到文件**，由宿主拼好、统一发出（见 sendDigest）。
+   * 🔴 硬约束：B站 私信单条上限 **330 字**（我二分查找实测的），所以文案必须极短。
+   */
+  const dmInstruction = () => {
+    if (!cfg.dmEnabled || !cfg.dmUid) return ''
+    const n = Number(cfg.dmTopN || 0)
+    return `\n\n⭐ 【额外任务】另外写一份「私信精简版」到 ${join(outDir, 'digest.txt')}（覆盖写，不要追加）。`
+      + `这份是发给使用者的 B站 私信，他要靠它决定点开哪个。要求：`
+      + `① **整篇不超过 300 字**（B站 私信单条上限 330 字，超了发不出去）；`
+      + `② 第一行固定格式：\`🐟 刷B站 · MM/DD · N条\`（N = 实际条数）；`
+      + `③ 然后每条**两行**：第一行 \`①标题 一句极短理由\`，第二行只放 BV 号（如 \`BV1supA6VE2R\`）；`
+      + `④ 最多 ${n > 0 ? n : '10'} 条，按值不值得看排序；`
+      + `⑤ 标题和理由都要压到最短（理由别超过 15 字），宁可少写几条也别超字数；`
+      + `⑥ 纯文本，不要 markdown、不要链接以外的任何格式。`
+  }
+
+  /**
+   * ⭐ 宿主发送私信（方案 A 的后半截：模型只写文案，宿主负责发）。
+   *
+   * 为什么由宿主发：
+   *   · 稳 —— 不靠模型"记得"调工具；它只要写个文件就行
+   *   · 省 —— 不用为"发消息"再生成一轮工具调用
+   *   · 可校验 —— 长度、UID、去重都在 JS 里把关
+   *
+   * 🔴 B站 私信单条上限 330 字（二分查找实测：330 能发，331 报 21007）。
+   *    所以这里超了会**逐条往下砍**，而不是硬发（硬发会整体失败）。
+   */
+  const sendDigest = async (why) => {
+    if (!cfg.dmEnabled || !cfg.dmUid) return { skipped: '私信没开 / 没填 UID' }
+    const file = join(outDir, 'digest.txt')
+    if (!existsSync(file)) return { skipped: '这一轮没写出 digest.txt' }
+
+    let text = ''
+    try { text = readFileSync(file, 'utf8').trim() } catch (e) { return { error: '读 digest.txt 失败：' + (e?.message ?? e) } }
+    if (!text) return { skipped: 'digest.txt 是空的' }
+
+    // 去重 + 砍到能发下（逐行成对：标题行 + BV 行）
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+    const head = lines[0] || ''
+    const pairs = []
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i]
+      if (/^BV[0-9A-Za-z]{8,}$/.test(l)) {
+        if (pairs.length) pairs[pairs.length - 1].bv = l
+      } else if (/^[①②③④⑤⑥⑦⑧⑨⑩]/.test(l)) {
+        pairs.push({ line: l, bv: '' })
+      }
+    }
+    const LIMIT = 300            // 留 30 字余量（上限 330）
+    let kept = pairs.filter((p) => p.bv)
+    let body = () => [head, ...kept.flatMap((p) => [p.line, p.bv])].join('\n')
+    while (kept.length > 1 && body().length > LIMIT) kept.pop()   // 超了就砍最后一条
+    const final = body()
+    if (final.length > LIMIT + 40) return { error: `私信还是太长（${final.length} 字），跳过发送` }
+
+    // 同一份内容不重复发（防止重跑/重试时刷屏）
+    try {
+      if (readJson(join(stateDir, 'dm-last.json'), {}).hash === hashOf(final)) {
+        return { skipped: '这份私信和上次一样，不重复发' }
+      }
+    } catch { /* 读不到就照发 */ }
+
+    try {
+      const r = await call('bili_send_message', { receiver_uid: Number(cfg.dmUid), text: final })
+      const ok = !(r && typeof r === 'object' && r.success === false)
+      if (ok) {
+        writeJson(join(stateDir, 'dm-last.json'), { hash: hashOf(final), at: new Date().toISOString(), why, len: final.length })
+        log(`私信已发（${why}，${final.length} 字，${kept.length} 条）→ UID ${cfg.dmUid}`)
+        return { sent: true, len: final.length, count: kept.length, raw: r }
+      }
+      log(`私信发送失败：${JSON.stringify(r).slice(0, 200)}`)
+      return { error: '发送被拒', raw: r }
+    } catch (e) {
+      log(`私信发送出错：${e?.message ?? e}`)
+      return { error: String(e?.message ?? e) }
+    }
+  }
+
   const promptFor = () => {
     // ⭐ 章程取哪一份：**插件里那份（永远跟版本一致）**；但家里那份如果**比它新**，说明使用者自己改过 ⇒ 听使用者的。
     const shipped = join(pluginDir, 'prompts', 'duty.md')
@@ -505,6 +601,7 @@ export function apply(ctx, config) {
       + (cfg.replyToComments
         ? `回复评论：开着（每轮最多回 ${Number(cfg.replyPerRound) || 1} 条）—— 只回「直接回复到你那条评论下面的人」，回完记进报告；找不到你那条评论就跳过，别硬找。`
         : `回复评论：关着（一个字都不要回任何人 —— 有人回复你那条评论也不要理）。`)
+      + dmInstruction()
       + `最后用一句话汇报你挑到了什么。现在几点了自己看一眼系统时间。`
   }
 
@@ -586,7 +683,18 @@ export function apply(ctx, config) {
     const pick = (buf) => { try { appendFileSync(logFile, String(buf), 'utf8') } catch { /* 日志丢了不致命 */ } }
     child.stdout?.on('data', pick)
     child.stderr?.on('data', pick)
-    child.on('exit', (code) => log(`刷B站结束（${why}，code=${code}）`))
+    child.on('exit', (code) => {
+      log(`刷B站结束（${why}，code=${code}）`)
+      // ⭐ 方案 A：模型只写文案（digest.txt），**由宿主发**（稳、省、可校验长度）
+      //    ⚠️ 只在成功那一轮发（code 0）。失败的那轮没有可信内容，发了反而误导。
+      if (code === 0) {
+        sendDigest(why).then((r) => {
+          if (r?.sent) log(`私信结果：已发 ${r.count} 条 / ${r.len} 字`)
+          else if (r?.error) log(`私信没发成：${r.error}`)
+          else if (r?.skipped) log(`私信跳过：${r.skipped}`)
+        }).catch((e) => log(`私信收尾出错（已兜住）：${e?.message ?? e}`))
+      }
+    })
     child.on('error', (e) => log(`刷B站起不来：${e?.message ?? e}`))
     return { started: true, why, profile: cfg.headlessProfile, cwd, log: logFile }
    } catch (e) {
@@ -902,7 +1010,7 @@ export function apply(ctx, config) {
       for (const k of ['perDay', 'autoRun', 'runAt', 'autoComment', 'transcribe', 'asrModel',
         'commentPerRound', 'mentionName',
         'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'llmProvider', 'llmModel', 'llmReasoningEffort',
-        'workspace', 'reportLevel', 'replyToComments', 'replyPerRound']) {
+        'workspace', 'reportLevel', 'replyToComments', 'replyPerRound', 'dmEnabled', 'dmUid', 'dmTopN']) {
         if (k in body) patch[k] = body[k]
       }
       if ('perDay' in patch) patch.perDay = Math.max(0, Math.min(Number(patch.perDay) || 0, 50))
