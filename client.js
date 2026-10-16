@@ -62,6 +62,9 @@ window.__ModuleLoader__.load({
   background:var(--dsw-alias-bg-overlay,rgba(128,128,128,.12));color:inherit;font-family:inherit;}
 [data-bd-input]:focus{outline:none;border-color:#3b82f6;}
 [data-bd-num]{width:88px;text-align:center;}
+[data-bd-wide]{width:200px;}
+[data-bd-chips]{display:flex;flex-wrap:wrap;gap:6px;}
+[data-bd-chip]{font-size:11px;padding:4px 8px;}
 [data-bd-btn]{padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit;
   border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));
   background:var(--dsw-alias-bg-overlay,rgba(128,128,128,.14));color:inherit;}
@@ -359,7 +362,7 @@ window.__ModuleLoader__.load({
                 h('div', { 'data-bd-note': '' }, '24 小时制，本地时间；填 09:00 就是每天早上九点')),
               h('input', {
                 'data-bd-input': '', type: 'text', inputMode: 'numeric',
-                placeholder: DEFAULT_RUN_AT, style: 'width:92px;text-align:center',
+                placeholder: DEFAULT_RUN_AT, 'data-bd-num': '',
                 value: runAt ?? '',
                 onChange: (e) => setRunAt(e.target.value),
                 onBlur: () => {
@@ -493,7 +496,7 @@ window.__ModuleLoader__.load({
               h('div', { 'data-bd-label': '' }, 'provider（路由名）'),
               h('div', { 'data-bd-note': '' }, '比如 deepseek-official / workbuddy-vision；留空 = 不覆盖')),
             h('input', {
-              'data-bd-input': '', style: 'width:200px',
+              'data-bd-input': '', 'data-bd-wide': '',
               placeholder: '（用默认）', value: (llm && llm.provider) || '',
               onChange: (e) => setLlm({ ...(llm || {}), provider: e.target.value }),
             })),
@@ -503,7 +506,7 @@ window.__ModuleLoader__.load({
               h('div', { 'data-bd-label': '' }, '模型'),
               h('div', { 'data-bd-note': '' }, '比如 deepseek-v4.1-flash；留空 = 不覆盖')),
             h('input', {
-              'data-bd-input': '', style: 'width:200px',
+              'data-bd-input': '', 'data-bd-wide': '',
               placeholder: '（用默认）', value: (llm && llm.model) || '',
               onChange: (e) => setLlm({ ...(llm || {}), model: e.target.value }),
             })),
@@ -513,17 +516,17 @@ window.__ModuleLoader__.load({
               h('div', { 'data-bd-label': '' }, '思考档位'),
               h('div', { 'data-bd-note': '' }, 'low / medium / high；留空 = 不覆盖')),
             h('input', {
-              'data-bd-input': '', style: 'width:92px;text-align:center',
+              'data-bd-input': '', 'data-bd-num': '',
               placeholder: '（默认）', value: (llm && llm.effort) || '',
               onChange: (e) => setLlm({ ...(llm || {}), effort: e.target.value }),
             })),
           // 清单：点出来一堆可点的按钮，点一下填进 provider/model
           models?.providers?.length ? h('div', { 'data-bd-note': '' },
             '点下面任意一个，直接填进上面的输入框：') : null,
-          models?.providers?.length ? h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px' },
+          models?.providers?.length ? h('div', { 'data-bd-chips': '' },
             ...models.providers.flatMap((p) => (p.models || []).map((m) => h('button', {
               key: p.provider + '/' + m.id,
-              'data-bd-btn': '', style: 'font-size:11px;padding:4px 8px',
+              'data-bd-btn': '', 'data-bd-chip': '',
               onClick: () => setLlm({ provider: p.provider, model: m.id, effort: (llm && llm.effort) || '' }),
             }, `${p.provider} / ${m.id}`)))) : null,
           models?.errors?.length ? h('div', { 'data-bd-note': '' }, '（有些 provider 拿不到模型：' + models.errors.join('；') + '）') : null),
