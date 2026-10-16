@@ -707,11 +707,28 @@ export function apply(ctx, config) {
   let installingAsr = false
 
   /** 找 uv：系统里的 → 插件家里下好的 → 自己下一份（给"两样都没有"的人）；主/转写两套安装共用 */
+  /** 一个文件"能不能真的跑起来"（不只是存在）—— 架构不对的二进制会 spawn 失败 */
+  const canRun = (file) => new Promise((resolve) => {
+    try {
+      const c = spawn(file, ['--version'], { windowsHide: true, stdio: 'ignore' })
+      c.on('exit', (code) => resolve(code === 0))
+      c.on('error', () => resolve(false))
+    } catch { resolve(false) }
+  })
+
   const resolveUv = async () => {
     const bundled = join(stateDir, 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv')
     if (await haveUv()) return 'uv'
-    if (existsSync(bundled)) return bundled
-    appendInstall('这台机器上没有 uv —— 我下一份放进插件家目录（单文件、免管理员、约 15MB，只需要一次）…\n')
+    // 🔴 2026-10-16 修的坑（真机上踩到）：这里以前是 `if (existsSync(bundled)) return bundled` ——
+    //    **只看文件在不在，不看它能不能跑**。于是老版本下错的那个 x86_64 uv 会一直被当成好的用，
+    //    后面每一步都 `spawn … ENOENT`（"文件不存在"其实是"执行不了"），
+    //    而且**修好的 ensureUv 根本没机会执行** —— 因为在这里就短路返回了 ✗✗。
+    //    ⇒ 现在：存在也要验一下能不能跑；不能跑就交给 ensureUv（它会删掉重下）。
+    if (existsSync(bundled)) {
+      if (await canRun(bundled)) return bundled
+      appendInstall(`家目录里那份 uv 跑不起来（大概是以前下错的架构）：${bundled}\n`)
+    }
+    appendInstall('这台机器上没有可用的 uv —— 我下一份放进插件家目录（单文件、免管理员、约 15MB，只需要一次）…\n')
     const got = await ensureUv({ dir: join(stateDir, 'bin'), log: appendInstall })
     if (got) appendInstall('uv 已就位：' + got + '\n')
     return got
