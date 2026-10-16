@@ -27,6 +27,8 @@ import { ensureUv } from './lib/uvfetch.mjs'
 
 export const name = 'bili-scroll'
 export const inject = ['webServer', 'tools', 'settings']
+// ⚠️ llm 不写进 inject：它不写的话插件在缺 llm 的 profile 里就起不来，
+//    而我们只在一个 HTTP 路由里用它（拿不到就返回空清单）。用 ctx.get('llm') 软取。
 
 /**
  * 🔴 每个字段都要 `.extra('volatile', true)`：DSH 的 settings.update() 只认 volatile 字段
@@ -59,6 +61,12 @@ export const Config = z.object({
   dshBin: z.string().default('').extra('volatile', true),
   /** headless 那一轮用哪个 profile */
   headlessProfile: z.string().default('headless').extra('volatile', true),
+  /** ⭐ 跑那一轮用哪个 provider 路由（**留空 = 用 profile 原本的默认**） */
+  llmProvider: z.string().default('').extra('volatile', true),
+  /** ⭐ 跑那一轮用哪个模型（留空 = 用 profile 原本的默认） */
+  llmModel: z.string().default('').extra('volatile', true),
+  /** ⭐ 思考档位（low / medium / high；留空 = 不覆盖） */
+  llmReasoningEffort: z.string().default('').extra('volatile', true),
   /** 给那一轮叠一份插件自己的 patch（把 B站 MCP 挂上）—— 用户 profile 一个字都不用改 */
   overlayMcp: z.boolean().default(true).extra('volatile', true),
   /** 跑 headless 时的工作目录 */
@@ -125,7 +133,9 @@ export function apply(ctx, config) {
    */
   const DEFAULTS = {
     perDay: 5, autoRun: false, runAt: '09:00', autoComment: false, transcribe: false, asrModel: 'small',
-    keywords: [], commentPerRound: 1, mentionName: '', pythonPath: 'python', dshBin: '', headlessProfile: 'headless', overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
+    keywords: [], commentPerRound: 1, mentionName: '', pythonPath: 'python', dshBin: '', headlessProfile: 'headless',
+    llmProvider: '', llmModel: '', llmReasoningEffort: '',
+    overlayMcp: true, workspace: '', reportLevel: 'full', replyToComments: false, replyPerRound: 1,
   }
   const normalize = (src, base) => {
     const out = { ...base }
@@ -495,22 +505,44 @@ export function apply(ctx, config) {
    *    所以插件自己生成一份、跑的时候 `--patch` 带上（dsh 支持可重复的 `--patch`）。
    */
   const ensureOverlay = () => {
-    if (!cfg.overlayMcp) return null
     const file = join(stateDir, 'headless-overlay.yml')
     const script = join(stateDir, 'mcp_server.py')
     const posix = (p) => String(p).replace(/\\/g, '/')
-    const yml = [
-      '- insert:',
-      '    - id: mcp-bili-duty',
-      "      name: '@deepseek-ai/dsh-mcp-client'",
-      '      config:',
-      '        serverName: bili-duty',
-      '        transport: stdio',
-      `        command: '${posix(cfg.pythonPath || 'python')}'`,
-      '        args:',
-      `          - '${posix(script)}'`,
-      '',
-    ].join('\n')
+    const yq = (v) => `'${String(v).replace(/'/g, "''")}'`
+    const lines = []
+
+    // ① ⭐ 模型：这一轮用哪个 provider / 模型 / 思考档位。
+    //    为什么需要：跑一轮是**另起一个 headless 会话**，它用哪个模型由 headless profile 的
+    //    `agent-default-model` 决定 —— 跟用户在 UI 里选的模型是**两套配置**。
+    //    这里把它写进 overlay，作为一条 agent-default-model patch 覆盖进去。
+    //    ⚠️ 留空 = 不写这段 ⇒ 用 profile 原本的默认（向后兼容，不会把别人的配置改坏）。
+    const prov = String(cfg.llmProvider || '').trim()
+    const model = String(cfg.llmModel || '').trim()
+    const effort = String(cfg.llmReasoningEffort || '').trim()
+    if (prov || model || effort) {
+      lines.push('- id: agent-default-model', "  name: '@deepseek-ai/dsh-agent-default-model'", '  config:')
+      if (prov) lines.push(`    provider: ${yq(prov)}`)
+      if (model) lines.push(`    model: ${yq(model)}`)
+      if (effort) lines.push(`    reasoningEffort: ${yq(effort)}`)
+    }
+
+    // ② B站 MCP：把那份 Python MCP 挂成工具（用户 profile 一个字都不用改）
+    if (cfg.overlayMcp) {
+      lines.push(
+        '- insert:',
+        '    - id: mcp-bili-duty',
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        '      config:',
+        '        serverName: bili-duty',
+        '        transport: stdio',
+        `        command: ${yq(posix(cfg.pythonPath || 'python'))}`,
+        '        args:',
+        `          - ${yq(posix(script))}`,
+      )
+    }
+
+    if (!lines.length) return null
+    const yml = lines.join('\n') + '\n'
     try { writeFileSync(file, yml, 'utf8'); return file } catch (e) { log(`写 overlay 失败：${e?.message ?? e}`); return null }
   }
 
@@ -842,7 +874,8 @@ export function apply(ctx, config) {
       const patch = {}
       for (const k of ['perDay', 'autoRun', 'runAt', 'autoComment', 'transcribe', 'asrModel',
         'commentPerRound', 'mentionName',
-        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'workspace', 'reportLevel', 'replyToComments', 'replyPerRound']) {
+        'keywords', 'pythonPath', 'dshBin', 'headlessProfile', 'llmProvider', 'llmModel', 'llmReasoningEffort',
+        'workspace', 'reportLevel', 'replyToComments', 'replyPerRound']) {
         if (k in body) patch[k] = body[k]
       }
       if ('perDay' in patch) patch.perDay = Math.max(0, Math.min(Number(patch.perDay) || 0, 50))
@@ -934,6 +967,36 @@ export function apply(ctx, config) {
         return 0
       }
       out.hasNew = Boolean(out.latest) && cmp(out.latest, out.current) > 0
+      return sendJson(res, 200, out)
+    }
+
+    // ⭐「有哪些模型可选」：从 dsh 自己的 llm 服务拉清单，**不硬编码**（provider 是用户自己装的，写死必然过期）
+    if (req.method === 'GET' && path === '/api/bili-duty/models') {
+      const out = { ok: true, providers: [], errors: [] }
+      let llm = null
+      try { llm = ctx.get?.('llm') } catch { llm = null }
+      if (!llm || typeof llm.listProviders !== 'function') {
+        out.ok = false
+        out.error = '拿不到 dsh 的 llm 服务 —— 可以手动填 provider / 模型名'
+        return sendJson(res, 200, out)
+      }
+      let provs = []
+      try { provs = llm.listProviders() || [] } catch (e) { out.errors.push('listProviders: ' + (e?.message ?? e)) }
+      for (const p of provs) {
+        const id = typeof p === 'string' ? p : (p?.provider ?? p?.id ?? '')
+        if (!id) continue
+        const row = { provider: id, displayName: (p?.displayName ?? id), models: [] }
+        try {
+          const ms = await llm.listModels(id)
+          row.models = (ms || []).map((m) => ({ id: m?.id ?? '', name: m?.name ?? m?.id ?? '' })).filter((m) => m.id)
+        } catch (e) {
+          // ⭐ 单个 provider 抛错只跳过它自己，不拖垮整张清单
+          out.errors.push(`${id}: ${e?.message ?? e}`)
+        }
+        out.providers.push(row)
+      }
+      // 当前选的是哪个（设置页要回显）
+      out.current = { provider: cfg.llmProvider || '', model: cfg.llmModel || '', reasoningEffort: cfg.llmReasoningEffort || '' }
       return sendJson(res, 200, out)
     }
 

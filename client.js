@@ -145,6 +145,9 @@ window.__ModuleLoader__.load({
       //    ⇒ 直接绑 cfg 的话，用户打字打到一半就被冲没了 ✗（2026-10-14 陌生人验收时抓到）
       const [perDay, setPerDay] = React.useState(null)
       const [runAt, setRunAt] = React.useState(null)
+      const [llm, setLlm] = React.useState(null)        // { provider, model, effort } 草稿
+      const [models, setModels] = React.useState(null)  // 从 /models 拉到的清单
+      const [modelsBusy, setModelsBusy] = React.useState(false)
       const [perRound, setPerRound] = React.useState(null)
       const [replyPer, setReplyPer] = React.useState(null)
       const [mention, setMention] = React.useState(null)
@@ -161,6 +164,7 @@ window.__ModuleLoader__.load({
         if (cfg && rl === null) setRl(cfg.reportLevel || 'full')
         if (cfg && perDay === null) setPerDay(String(cfg.perDay ?? 5))
         if (cfg && runAt === null) setRunAt(cfg.runAt || DEFAULT_RUN_AT)
+        if (cfg && llm === null) setLlm({ provider: cfg.llmProvider || '', model: cfg.llmModel || '', effort: cfg.llmReasoningEffort || '' })
         if (cfg && perRound === null) setPerRound(String(cfg.commentPerRound ?? 1))
         if (cfg && replyPer === null) setReplyPer(String(cfg.replyPerRound ?? 1))
         if (cfg && mention === null) setMention(cfg.mentionName || '')
@@ -298,6 +302,20 @@ window.__ModuleLoader__.load({
           }, 2000)
         } catch (e) { setLoginTone('warn'); setLoginState(String(e?.message ?? e)) }
         finally { setBusy('') }
+      }
+
+      const loadModels = async () => {
+        setModelsBusy(true)
+        try {
+          const r = await jget('/models')
+          setModels(r)
+          if (!r?.ok) say(r?.error || '拿不到模型清单 —— 可以手动填', 'warn')
+        } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setModelsBusy(false) }
+      }
+
+      const saveLlm = async () => {
+        const v = llm || {}
+        await patch({ llmProvider: String(v.provider || '').trim(), llmModel: String(v.model || '').trim(), llmReasoningEffort: String(v.effort || '').trim() }, '这一轮用哪个模型')
       }
 
       const onSaveText = async () => {
@@ -456,6 +474,59 @@ window.__ModuleLoader__.load({
           h('div', { 'data-bd-row': '' },
             h('button', { 'data-bd-btn': '', 'data-primary': '', disabled: Boolean(busy), onClick: onSaveText }, '保存'),
             msg ? h('div', { 'data-bd-msg': '', 'data-good': msgTone === 'good' ? '' : undefined, 'data-warn': msgTone === 'warn' ? '' : undefined }, msg) : null)),
+
+        /* ── 用哪个模型 ── */
+        h('div', { 'data-bd-sec': '' },
+          h('div', { 'data-bd-h': '' }, '用哪个模型'),
+          h('div', { 'data-bd-note': '' },
+            '跑一轮是另起一个 headless 会话，它用哪个模型由这里决定 —— 跟你在界面上选的模型是两套配置。',
+            h('br'),
+            '留空 = 用 profile 原本的默认（不覆盖）。'),
+          h('div', { 'data-bd-row': '' },
+            h('button', { 'data-bd-btn': '', disabled: modelsBusy, onClick: loadModels },
+              modelsBusy ? '正在拉清单…' : '拉取可用模型'),
+            h('div', { 'data-bd-grow': '' }),
+            h('button', { 'data-bd-btn': '', 'data-primary': '', onClick: saveLlm }, '保存')),
+          // provider
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, 'provider（路由名）'),
+              h('div', { 'data-bd-note': '' }, '比如 deepseek-official / workbuddy-vision；留空 = 不覆盖')),
+            h('input', {
+              'data-bd-input': '', style: 'width:200px',
+              placeholder: '（用默认）', value: (llm && llm.provider) || '',
+              onChange: (e) => setLlm({ ...(llm || {}), provider: e.target.value }),
+            })),
+          // model
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '模型'),
+              h('div', { 'data-bd-note': '' }, '比如 deepseek-v4.1-flash；留空 = 不覆盖')),
+            h('input', {
+              'data-bd-input': '', style: 'width:200px',
+              placeholder: '（用默认）', value: (llm && llm.model) || '',
+              onChange: (e) => setLlm({ ...(llm || {}), model: e.target.value }),
+            })),
+          // effort
+          h('div', { 'data-bd-row': '' },
+            h('div', { 'data-bd-grow': '' },
+              h('div', { 'data-bd-label': '' }, '思考档位'),
+              h('div', { 'data-bd-note': '' }, 'low / medium / high；留空 = 不覆盖')),
+            h('input', {
+              'data-bd-input': '', style: 'width:92px;text-align:center',
+              placeholder: '（默认）', value: (llm && llm.effort) || '',
+              onChange: (e) => setLlm({ ...(llm || {}), effort: e.target.value }),
+            })),
+          // 清单：点出来一堆可点的按钮，点一下填进 provider/model
+          models?.providers?.length ? h('div', { 'data-bd-note': '' },
+            '点下面任意一个，直接填进上面的输入框：') : null,
+          models?.providers?.length ? h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px' },
+            ...models.providers.flatMap((p) => (p.models || []).map((m) => h('button', {
+              key: p.provider + '/' + m.id,
+              'data-bd-btn': '', style: 'font-size:11px;padding:4px 8px',
+              onClick: () => setLlm({ provider: p.provider, model: m.id, effort: (llm && llm.effort) || '' }),
+            }, `${p.provider} / ${m.id}`)))) : null,
+          models?.errors?.length ? h('div', { 'data-bd-note': '' }, '（有些 provider 拿不到模型：' + models.errors.join('；') + '）') : null),
 
         /* ── 环境与账号 ── */
         h('div', { 'data-bd-sec': '' },
