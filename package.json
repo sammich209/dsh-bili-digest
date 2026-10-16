@@ -1,6 +1,6 @@
 {
   "name": "dsh-bili-digest",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "DSH 插件：每天替你挑一批 B站 视频，读字幕原文后按「值不值得看」排序给你",
   "keywords": [
     "dsh",
