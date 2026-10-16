@@ -1,5 +1,7 @@
 # dsh-bili-digest ｜ 刷B站
 
+> **当前版本 v0.2.0** · [Releases](https://github.com/sammich209/dsh-bili-digest/releases) · [CHANGELOG](CHANGELOG.md)
+>
 > 基于 [c1overzz/dsh-bili-scroll](https://github.com/c1overzz/dsh-bili-scroll)（MIT）修改。
 > 本 fork 的改动：**去掉峰谷时段，改成"每天固定时刻跑一轮 + 当天补跑"**；`perDay` 从"上限"改为"每天固定量"，
 > 报告**按值不值得看排序**；修掉 EBUSY 崩宿主与死代码。原作者的署名与许可证一并保留（见 `LICENSE` 与 `vendor/bilibili-mcp/LICENSE`）。
@@ -37,14 +39,17 @@
   · ⚠️ **如果杀软 / Windows Defender 报这个下载**：把插件家目录 `%USERPROFILE%\.dsh\bili-duty\bin\` **加白**即可；
     不想加白也行，自己装一份 uv 或 Python 3.10+ 就绕过去了 ✓
 
-> 计划中（v0.1.1）：**插件自己把 `uv` 下到自己的家目录** ⇒ 做到"一键准备环境"，这条前提就不用用户操心了。
+> ✅ 已经做到：**插件自己把 `uv` 下到自己的家目录**（按架构选对版本）⇒ "一键准备环境"。
+> ⚠️ 在 **arm64**（比如手机上的 dsha）上，本 fork 修掉了"下成 x86_64 跑不起来"的老问题。
 
 ## 装
 
 
 ```bash
-dsh plugin --profile web add dsh-bili-duty     # 从 npm
+dsh plugin --profile web add github:sammich209/dsh-bili-digest
 ```
+
+> ⚠️ 本仓库**没有发布到 npm** —— 别用裸包名装，装不到。必须带 `github:` 前缀。
 
 ⚠️ 装完**必须重启一次 dsh**（bundle 层要重启才组装）。然后进 **设置 → 刷B站**。
 
@@ -103,9 +108,12 @@ dsh plugin --profile web add dsh-bili-duty     # 从 npm
 
 ## 路线图
 
-- **v0.1（当前）**：内置 MCP + 扫码登录 + 章程 + 设置页（每天定时 / 定量刷 / 自动评论 / 工作区）+ 每日定时器（含补跑）+ 报告
-- **v0.2**：判重表文档化、报告归档、失败重试与日志查看
-- **v0.3**：**用 JS 重写那几个接口 ⇒ 不再需要 Python**（零安装）
+- **v0.2（当前 · 本 fork）**：每天固定时刻跑（含补跑）+ 报告排序 + **能挑模型** +
+  **arm64 可用** + **时间按北京时间** + 修掉设置页空白与崩宿主的隐患
+- **下一步**：判重表文档化、报告归档、失败重试与日志查看
+- **再往后**：**用 JS 重写那几个接口 ⇒ 不再需要 Python**（零安装）
+
+上游的 v0.1 系列（0.1.0–0.1.3）见 [CHANGELOG](CHANGELOG.md)。
 
 ## 许可证
 

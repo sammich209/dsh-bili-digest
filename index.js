@@ -26,6 +26,15 @@ import { loginStart, loginPoll, saveCredential, renderQrPng } from './lib/login.
 import { ensureUv } from './lib/uvfetch.mjs'
 
 export const name = 'bili-scroll'
+
+/**
+ * ⭐ 这个 fork 的"家"：GitHub 仓库（**不在 npm 上** —— 所以检查更新/一键升级都必须走 GitHub，
+ *    原来写的是 registry.npmjs.org，那个包名根本没发布 ⇒ 这两个功能是死的）。
+ */
+export const REPO = 'sammich209/dsh-bili-digest'
+export const REPO_URL = `https://github.com/${REPO}`
+/** GitHub 的 latest release 接口（不需要 token，公开仓库） */
+const RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`
 export const inject = ['webServer', 'tools', 'settings']
 // ⚠️ llm 不写进 inject：它不写的话插件在缺 llm 的 profile 里就起不来，
 //    而我们只在一个 HTTP 路由里用它（拿不到就返回空清单）。用 ctx.get('llm') 软取。
@@ -415,25 +424,26 @@ export function apply(ctx, config) {
     return st
   }
 
-  // ⭐ 一键升级：由宿主自己跑 `dsh plugin --profile web add dsh-bili-digest`
+  // ⭐ 一键升级：由宿主自己跑 `dsh plugin --profile web add github:sammich209/dsh-bili-digest`
+  //    ⚠️ 必须是 `github:` 前缀 —— 这个包**不在 npm 上**，裸包名装不到（原来就是裸名，必然失败）
   //    ⚠️ 装完必须重启 dsh 才生效；⚠️ Windows 上"替换正在运行的插件"可能被文件占用挡住（我们踩过）
   let upgrading = false
   const runUpgrade = () => {
     if (upgrading) return { ok: true, busy: true, log: installLogFile, hint: '正在升级，别重复点' }
     upgrading = true
-    appendInstall('\n=== ' + new Date().toISOString() + ' 开始升级（add dsh-bili-digest）===\n')
+    appendInstall('\n=== ' + new Date().toISOString() + ` 开始升级（add github:${REPO}）===\n`)
     ;(async () => {
       try {
         const dsh = resolveDsh()
         // ⭐ 照抄那一轮的形状：resolveDsh 返回 { command, args, shell }
         //    （写错就退化成裸 'dsh'，而宿主 PATH 里常常没有它 ⇒ 静默失败）
         let cmd = dsh.command || 'dsh'
-        let args = [...(dsh.args || []), 'plugin', '--profile', 'web', 'add', 'dsh-bili-digest']
+        let args = [...(dsh.args || []), 'plugin', '--profile', 'web', 'add', `github:${REPO}`]
         if (dsh.shell) { args = ['/c', cmd, ...args]; cmd = 'cmd.exe' }
         appendInstall('$ ' + cmd + ' ' + args.join(' ') + '\n')
         const code = await spawnTo(cmd, args, { sink: appendInstall })
         if (code === 0) appendInstall('=== 升级完成 —— 重启一次 dsh 才生效 ===\n')
-        else appendInstall('=== 升级没成功（exit ' + code + '）。可以自己手动跑一次：dsh plugin --profile web add dsh-bili-digest ===\n')
+        else appendInstall(`=== 升级没成功（exit ${code}）。可以自己手动跑一次：dsh plugin --profile web add github:${REPO} ===\n`)
       } catch (e) { appendInstall('升级崩了：' + (e?.stack ?? e) + '\n') } finally { upgrading = false }
     })()
     return { ok: true, started: true, log: installLogFile, hint: '正在升级 —— 完成后重启一次 dsh 才生效' }
@@ -946,16 +956,19 @@ export function apply(ctx, config) {
 
     // 「检查更新」：⚠️ 只在用户点按钮时才联网（不偷偷发请求 ✓），结果缓存一天 ✓
     if (req.method === 'GET' && path === '/api/bili-duty/update') {
-      const out = { ok: true, current: myVersion(), latest: '', hasNew: false, page: 'https://www.npmjs.com/package/dsh-bili-digest' }
+      const out = { ok: true, current: myVersion(), latest: '', hasNew: false, page: `${REPO_URL}/releases`, repo: REPO_URL }
       try {
         if (updateCache && Date.now() - updateCache.at < 24 * 3600 * 1000) out.latest = updateCache.latest
         else {
           const ctrl = new AbortController()
           const timer = setTimeout(() => ctrl.abort(), 8000)
-          const r = await fetch('https://registry.npmjs.org/dsh-bili-digest/latest', { signal: ctrl.signal })
+          // ⭐ 查 GitHub 的 latest release（原来查 npm，但包没发到 npm ⇒ 永远是空的）
+          const r = await fetch(RELEASE_API, { signal: ctrl.signal, headers: { accept: 'application/vnd.github+json' } })
           clearTimeout(timer)
           const j = await r.json()
-          out.latest = String(j.version || '')
+          // tag 形如 v0.2.0 ⇒ 去掉前缀当版本号比
+          out.latest = String(j.tag_name || '').replace(/^v/, '')
+          if (!out.latest) out.error = j?.message ? String(j.message) : '仓库还没有 release'
           updateCache = { at: Date.now(), latest: out.latest }
         }
       } catch (e) { out.ok = false; out.error = String(e?.message ?? e); return sendJson(res, 200, out) }

@@ -234,7 +234,7 @@ window.__ModuleLoader__.load({
               say('有新版 v' + r.latest + '（你的是 v' + r.current + '）—— 点右边的「一键升级」，完了重启一次 dsh', 'warn')
             } else say('已经是最新版 v' + r.current, 'good')
           } else {
-            say('查不到最新版（可能网络不通）—— 你现在的版本是 v' + ((r && r.current) || '?'))
+            say('查不到最新版（' + ((r && r.error) || '网络不通') + '）—— 你现在的版本是 v' + ((r && r.current) || '?'))
           }
         } catch (e) { say(String(e?.message ?? e), 'warn') } finally { setBusy('') }
       }
